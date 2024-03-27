@@ -74,7 +74,7 @@ ttv_ds = datasets.DatasetDict(
 checkpoint = "Salesforce/codegen2-1B"
 tokenizer = AutoTokenizer.from_pretrained(checkpoint)
 
-# tokenized_datasets = ttv_ds.map(tokenize_function, batched=True)
+tokenized_datasets = ttv_ds.map(tokenize_function, batched=True)
 
 
 # model = AutoModelForCausalLM.from_pretrained(
