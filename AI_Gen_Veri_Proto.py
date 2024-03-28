@@ -1,5 +1,5 @@
 """
-In this program, I try to use a verilog dataset to fine-tune codegen.
+In this program, I try to use a verilog dataset to fine-tune codegen
 """
 
 import torch
