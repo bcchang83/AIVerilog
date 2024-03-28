@@ -104,7 +104,7 @@ tokenized_datasets = ttv_ds.map(
 )
 
 
-model = AutoModelForCausalLM.from_pretrained(pretrained_checkpoint)
+model = AutoModelForCausalLM.from_pretrained(pretrained_checkpoint).to(device)
 tokenizer.pad_token = tokenizer.eos_token
 data_collator = DataCollatorForLanguageModeling(tokenizer, mlm=False)
 args = TrainingArguments(
