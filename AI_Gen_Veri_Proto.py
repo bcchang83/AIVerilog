@@ -9,11 +9,6 @@ from datasets import load_dataset
 from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,
-    AutoModelForSeq2SeqLM,
-    AutoConfig,
-    AdamW,
-    GPT2LMHeadModel,
-    DataCollatorForSeq2Seq,
     DataCollatorForLanguageModeling,
     TrainingArguments,
     Trainer,
@@ -40,23 +35,18 @@ def clean_comment(example):
     return {"clean_text": re.sub(r"//(.)*", "", example["text"])}
 
 
-def get_prompt(example):
-    # pattern = r"(module (.)*)|(always @(.)*)"
-    pattern = r"(module (.)*)"
-    promptRegex = re.compile(pattern)
-    prompt = promptRegex.search(example["text"])
-    if prompt:
-        return {"prompt": "//" + prompt.group()}
-    else:
-        return {"prompt": None}
-
-
 def extrach_module(example):
     # module_pattern = r"module\s+(\w+)\s*\((.*?)\);(.*?)endmodule"
     module_pattern = r"module(.)*;(.*?)endmodule"
     module_match = re.search(module_pattern, example["clean_text"], re.DOTALL)
     if module_match:
-        return {"clean_text": module_match.group()}
+        prompt_pattern = r"(module (.)*)"
+        promptRegex = re.compile(prompt_pattern)
+        prompt = promptRegex.search(module_match.group())
+        if prompt:
+            return {"clean_text": "//" + prompt.group() + "\n" + module_match.group()}
+        else:
+            return {"clean_text": None}
     else:
         return {"clean_text": None}
 
@@ -73,8 +63,6 @@ def dataPreprocess(raw_datasets, small_data=False):
     unique_datasets = unique_datasets.map(clean_comment)
     unique_datasets = unique_datasets.map(extrach_module)
     unique_datasets = unique_datasets.filter(lambda x: x["clean_text"] is not None)
-    unique_datasets = unique_datasets.map(get_prompt)
-    unique_datasets = unique_datasets.filter(lambda x: x["prompt"] is not None)
     if small_data:
         print("Warning: using the small dataset!!!")
         unique_datasets = unique_datasets.map(calculate_text_length)
@@ -88,15 +76,17 @@ if torch.backends.mps.is_built():
     device = torch.device("mps")  # for Apple silicon
 else:
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+print("Device = {}".format(device))
 
-
-checkpoint = "Salesforce/codegen-350M-mono"
-epoch_num = 50
-small_data = False  # just for quick try
+pretrained_checkpoint = "Salesforce/codegen-350M-mono"
+checkpoint = "vgen-ds"
+epoch_num = 10
+batch_size = 4
+small_data = True  # just for quick try
 context_length = 128
 
 raw_datasets = load_dataset("shailja/Verilog_GitHub")
-unique_datasets = dataPreprocess(raw_datasets)
+unique_datasets = dataPreprocess(raw_datasets, small_data=small_data)
 train_test_ds = unique_datasets.train_test_split(test_size=0.4)
 test_val_ds = train_test_ds["test"].train_test_split(test_size=0.5)
 ttv_ds = datasets.DatasetDict(
@@ -107,31 +97,20 @@ ttv_ds = datasets.DatasetDict(
     }
 )
 
-# tokenizer = AutoTokenizer.from_pretrained(
-#     "huggingface-course/code-search-net-tokenizer"
-# )
-tokenizer = AutoTokenizer.from_pretrained(checkpoint)
+tokenizer = AutoTokenizer.from_pretrained(pretrained_checkpoint)
 
 tokenized_datasets = ttv_ds.map(
     tokenize_function, batched=True, remove_columns=ttv_ds["train"].column_names
 )
 
-# config = AutoConfig.from_pretrained(
-#     "gpt2",
-#     vocab_size=len(tokenizer),
-#     n_ctx=context_length,
-#     bos_token_id=tokenizer.bos_token_id,
-#     eos_token_id=tokenizer.eos_token_id,
-# )
-# model = GPT2LMHeadModel(config).to(device)
 
-model = AutoModelForCausalLM.from_pretrained(checkpoint)
+model = AutoModelForCausalLM.from_pretrained(pretrained_checkpoint)
 tokenizer.pad_token = tokenizer.eos_token
 data_collator = DataCollatorForLanguageModeling(tokenizer, mlm=False)
 args = TrainingArguments(
-    output_dir="vgen-ds",
-    per_device_train_batch_size=32,
-    per_device_eval_batch_size=32,
+    output_dir=checkpoint,
+    per_device_train_batch_size=batch_size,
+    per_device_eval_batch_size=batch_size,
     evaluation_strategy="steps",
     eval_steps=5_000,
     logging_steps=5_000,
@@ -144,7 +123,7 @@ args = TrainingArguments(
     save_steps=5_000,
     fp16=False,
     push_to_hub=False,
-    use_mps_device=True,
+    use_mps_device=device == "mps",
 )
 trainer = Trainer(
     model=model,
@@ -159,5 +138,5 @@ trainer.train()
 # test prediction
 text = "//module 2 to 1 mux"
 input_ids = tokenizer(text, return_tensors="pt").input_ids.to(device)
-generated_ids = model.generate(input_ids, max_length=128).to(device)
+generated_ids = model.generate(input_ids, max_length=context_length).to(device)
 print(tokenizer.decode(generated_ids[0], skip_special_tokens=True))
